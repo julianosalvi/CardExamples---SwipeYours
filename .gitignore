@@ -1,0 +1,16 @@
+*.class
+
+# Package Files #
+*.jar
+*.war
+*.ear
+bin
+build
+target
+
+!**/release/*.jar
+
+#eclipse
+.classpath
+.settings
+.project
