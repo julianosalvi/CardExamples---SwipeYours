@@ -5,10 +5,10 @@
 *.war
 *.ear
 bin
-build
 target
 
 !**/release/*.jar
+!**/build/libs/*.jar
 
 #eclipse
 .classpath
