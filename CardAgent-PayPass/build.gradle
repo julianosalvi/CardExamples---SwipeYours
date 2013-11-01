@@ -1,0 +1,24 @@
+apply plugin: 'java'
+sourceCompatibility  = 1.6
+targetCompatibility = 1.6
+
+dependencies {
+    compile fileTree(
+       dir: '../libs',
+       include: 'SimplyTappCardAgent1.0.jar'
+    ) 
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir 'src'
+        }
+    }
+}
+
+eclipse.classpath.file {
+    whenMerged { classpath ->
+        classpath.entries.findAll { entry -> entry.kind == 'lib' }*.exported = false
+    }
+}

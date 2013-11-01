@@ -9,7 +9,7 @@ import com.simplytapp.virtualcard.Agent;
 import com.simplytapp.virtualcard.CardAgentConnector;
 import com.simplytapp.virtualcard.TransceiveData;
 
-public class CardAgent extends Agent {
+public class PayPassAgent extends Agent {
 
 	private static final long serialVersionUID = 1L;
 	private final static byte sentApdu = 0x00;
@@ -29,14 +29,14 @@ public class CardAgent extends Agent {
 
 	private Cache cache = new Cache();
 	
-	public CardAgent() {
+	public PayPassAgent() {
 		allowSoftTransactions();
 		allowNfcTransactions();
 		denySocketTransactions();
 	}
 	
 	public static void install(CardAgentConnector cardAgentConnector) {
-		new CardAgent().register(cardAgentConnector);
+		new PayPassAgent().register(cardAgentConnector);
 	}
 
 	private void loadLocalCache()

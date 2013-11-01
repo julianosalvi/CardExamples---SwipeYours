@@ -1,0 +1,40 @@
+apply plugin: 'java'
+sourceCompatibility  = 1.6
+targetCompatibility = 1.6
+
+dependencies {
+    compile fileTree(
+       dir: '../libs', 
+       includes: ['jc2.2.1.jar', 'SimplyTappSE1.0.jar', 'gp2.2.1.jar', 'gpj.jar']
+    ) 
+}
+
+//
+//  Runs the test.jcsh script in the simulator
+//
+task runtest(dependsOn: 'classes', type: JavaExec) {
+    main = "com.simplytapp.cardwrapper.CardWrapper"
+    standardInput = new FileInputStream(file('test.jcsh'))
+    classpath = sourceSets.main.runtimeClasspath
+    // -p 0 (0 is special, it runs the simulator on an arbitrary free port)
+    // -i <T0|NFC|noshell>
+    //        T0 - connect to the card contact interface
+    //        NFC - connect to the card NFC interface (default)
+    //        noshell - run the simulator and leave the port open
+    //                  for a different shell to connect
+    args = ["-p", "0", "-i", "NFC"]
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir 'src'
+        }
+    }
+}
+
+eclipse.classpath.file {
+    whenMerged { classpath ->
+        classpath.entries.findAll { entry -> entry.kind == 'lib' }*.exported = false
+    }
+}

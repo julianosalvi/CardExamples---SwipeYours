@@ -128,15 +128,6 @@ public class CardApplet extends Applet {
 					buf[i] = AL[i];
 				len = (short)(AL.length);
 				state = not_alive;
-				new Thread(new Runnable()
-				{
-					@Override
-					public void run() {
-						// TODO Auto-generated method stub
-						
-					}
-				}
-				).start();
 			}
 			else
 			{

@@ -6,7 +6,7 @@ public class Cache implements Serializable {
 	private static final long serialVersionUID = 1L;
 	CmdRsp[] cmdRsp = null;
 		
-	void rmCmdRsp(short index)
+	private void rmCmdRsp(short index)
 	{
 		CmdRsp[] tmp=null;
 		for(short i=0;i<cmdRsp.length;i++)
@@ -25,7 +25,7 @@ public class Cache implements Serializable {
 		}
 	}
 		
-	short getMatchIndex(byte[] cmd)
+	private short getMatchIndex(byte[] cmd)
 	{
 		if(cmdRsp==null)
 			return -1;

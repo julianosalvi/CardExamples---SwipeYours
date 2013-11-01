@@ -1,0 +1,40 @@
+#  Reset the card (same as /atr) and then selects default card manager:
+/card
+
+# Open a secure channel to card manager
+auth
+
+#  install -i <instance-AID> C9#([install-params]) <package-AID> <applet-AID>
+#
+#  Install the PPSE (Proximity Payment Secure Environment) and the specified
+#  card applet to the simulator.
+#
+#  We allow use of a pipe symbol in these commands which converts ascii
+#  symbols into hex.  For example:
+#
+#      |com.st      is shorthand for:  636f6d2e7374
+#      |Ppse2Pay    is shorthand for:  5070736532506179
+#      |CardApplet  is shorthand for:  436172644170706c6574
+#
+#  Our JavaCard implementation does not have a 16 character AID size limit that
+#  standard JavaCard implementations have.
+#
+#  The first command installs the PPSE applet using its standard name
+#  in widespread use on payment terminals: "2PAY.SYS.DDF01"
+#  (325041592e5359532e4444463031). The C9# pararmeter personalizes the default
+#  card applet ID of the point of sale applet. A0000000031010 is the
+#  registered VISA AID.
+install -i |2PAY.SYS.DDF01 -q C9#(A0000000031010) |com.st |Ppse2Pay
+
+#
+#  The second command installs our test applet as VISA's AID (A0000000031010).
+#  This is just a stub applet that doesn't respond to any instructions.
+#
+install -i A0000000031010 -q C9#() |com.st |CardApplet
+
+#  Example commands to select individual applets for testing:
+/select |2PAY.SYS.DDF01
+/select A0000000031010
+/atr
+
+exit

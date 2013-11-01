@@ -1,5 +1,5 @@
-CardAgent-VisaMSD--SwipeYours-
-==============================
+CardAgent-VisaMSD-SwipeYours
+============================
 
 card agent for visa contactless MSD
 
