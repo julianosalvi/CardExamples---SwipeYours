@@ -95,6 +95,11 @@ install -i A0000000041010 -q C9#(01541312ffffffa86a3d06cae7046a106358d5b8239cbe8
 /atr
 
 #
+#  select Mastercard AID
+#
+/select A0000000041010
+
+#
 # Send GPO instruction (Get Processing Options)
 #
 /send 80A8000002830000
