@@ -1,4 +1,19 @@
+# Generated files
+gen/
+bin/
+build/
+target/
+classes/
+*.log
+local.properties
 *.class
+*.jar
+*.war
+*.ear
+*.apk
+*.ap_
+*.dex
+.gradle/
 
 # Package Files #
 *.jar
@@ -6,9 +21,10 @@
 *.ear
 bin
 target
+.gradle
 
-!**/release/*.jar
-!**/build/libs/*.jar
+#!**/release/*.jar
+#!**/build/libs/*.jar
 
 #eclipse
 .classpath

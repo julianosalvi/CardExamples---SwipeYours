@@ -1,0 +1,29 @@
+apply plugin: 'java'
+apply plugin: 'eclipse'
+
+sourceCompatibility  = 1.6
+targetCompatibility = 1.6
+
+dependencies {
+    compile fileTree(
+       dir: '../../java/IssuerSdkBundle/sdk-libs', 
+       includes: ['stse-*.jar', 'json-*.jar', 'gpjNG.jar', 'GcmServerLib.jar']
+    )
+    compile fileTree(
+       dir: 'lib',includes: ['*.jar']
+    ) 
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir 'src'
+        }
+    }
+}
+
+eclipse.classpath.file {
+    whenMerged { classpath ->
+        classpath.entries.findAll { entry -> entry.kind == 'lib' }*.exported = false
+    }
+}

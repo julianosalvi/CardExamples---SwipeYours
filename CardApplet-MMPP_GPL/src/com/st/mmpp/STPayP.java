@@ -53,7 +53,7 @@ import com.st.mmpp.data.PaymentTokenPayloadSingleUseKey;
  * @author SimplyTapp, Inc.
  * @version 1.2 GPL
  */
-public final class PayP extends Applet implements ExtendedLength {
+public final class STPayP extends Applet implements ExtendedLength {
 
     private static final long serialVersionUID = 1L;
 
@@ -122,7 +122,7 @@ public final class PayP extends Applet implements ExtendedLength {
      * @param length
      *            the length of the AID bytes in array
      */
-    private PayP(byte[] array, short offset, byte length) {
+    private STPayP(byte[] array, short offset, byte length) {
         /*** Start allocate memory when applet is instantiated. ***/
         this.records = new Records(Constants.MAX_SFI_RECORDS);
 
@@ -186,7 +186,7 @@ public final class PayP extends Applet implements ExtendedLength {
      * @see javacard.framework.Applet.install
      */
     public static void install(byte[] array, short offset, byte length) {
-        new PayP(array, offset, length);
+        new STPayP(array, offset, length);
     }
 
     /**

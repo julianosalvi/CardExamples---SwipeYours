@@ -59,7 +59,7 @@ import com.st.vcbp.data.TransactionVerificationLog;
  * @author SimplyTapp, Inc.
  * @version 1.3.1 GPL
  */
-public final class PayW extends Applet implements ExtendedLength {
+public final class STPayW extends Applet implements ExtendedLength {
 
     private static final long serialVersionUID = 1L;
 
@@ -142,7 +142,7 @@ public final class PayW extends Applet implements ExtendedLength {
      * @param length
      *            the length of the AID bytes in array
      */
-    private PayW(byte[] array, short offset, byte length) {
+    private STPayW(byte[] array, short offset, byte length) {
         this.udk = (DESKey) KeyBuilder.buildKey(KeyBuilder.TYPE_DES, KeyBuilder.LENGTH_DES3_2KEY, false);
 
         this.udkMsd = (DESKey) KeyBuilder.buildKey(KeyBuilder.TYPE_DES, KeyBuilder.LENGTH_DES3_2KEY, false);
@@ -183,7 +183,7 @@ public final class PayW extends Applet implements ExtendedLength {
      * @see javacard.framework.Applet.install
      */
 	public static void install(byte[] array, short offset, byte length) {
-		new PayW(array, offset, length);
+		new STPayW(array, offset, length);
 	}
 
     /**
