@@ -31,7 +31,6 @@ import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
 import javacard.framework.JCSystem;
 import javacard.framework.Util;
-import javacard.security.AESKey;
 import javacard.security.DESKey;
 import javacard.security.KeyBuilder;
 import javacard.security.MessageDigest;
@@ -51,11 +50,14 @@ import com.st.mmpp.data.PaymentTokenPayloadSingleUseKey;
  * Implementation of PayP based on Remote-SE Mobile PayP
  * 
  * @author SimplyTapp, Inc.
- * @version 1.2 GPL
+ * @version 1.2.1 GPL
  */
 public final class STPayP extends Applet implements ExtendedLength {
 
     private static final long serialVersionUID = 1L;
+
+    // 1.2.1
+    private static final byte[] VERSION = { 0x31, 0x2E, 0x32, 0x2E, 0x31 };
 
     // Remote Management Information definitions.
     private static final byte RMI_VERSION                    = (byte) 0x60;
@@ -108,9 +110,9 @@ public final class STPayP extends Applet implements ExtendedLength {
     private PaymentTokenPayloadSingleUseKey ptpSuk;
     private byte[] cardProfileHash;
     private byte[] mobilePin;
-    private AESKey mobileKey;
     private MessageDigest sha256;
     private RandomData random;
+    private DataEncryption dataEncryption;
 
     /**
      * Creates Java Card applet object.
@@ -159,13 +161,11 @@ public final class STPayP extends Applet implements ExtendedLength {
         byte[] seed = DataUtil.stringToCompressedByteArray(String.valueOf(Calendar.getInstance().getTimeInMillis()));
         this.random.setSeed(seed, (short) 0, (short) seed.length);
 
-        // Generate Mobile Key using random.
-        byte[] mobileKeyData = new byte[32];
-        this.random.generateData(mobileKeyData, (short) 0, (short) mobileKeyData.length);
-        this.mobileKey = (AESKey) KeyBuilder.buildKey(KeyBuilder.TYPE_AES, 
-                                                      KeyBuilder.LENGTH_AES_256, 
-                                                      false);
-        this.mobileKey.setKey(mobileKeyData, (short) 0);
+        // Initialize Mobile Key.
+        this.dataEncryption = new DataEncryption();
+        if (!this.dataEncryption.initMobileKey()) {
+            System.out.println("Error: M_Key not initialized.");
+        }
 
         this.sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
         /*** End initialize variables specific to MPP Remote-SE Lite. ***/
@@ -212,7 +212,7 @@ public final class STPayP extends Applet implements ExtendedLength {
      *            the incoming <code>APDU</code> object
      * @see javacard.framework.Applet.process
      */
-    public void process(APDU apdu) {
+    public void process(APDU apdu) throws ISOException {
         byte[] apduBuffer = apdu.getBuffer();
 
         byte protocolMedia = (byte) (APDU.getProtocol() & APDU.PROTOCOL_MEDIA_MASK);
@@ -242,9 +242,17 @@ public final class STPayP extends Applet implements ExtendedLength {
             Util.arrayFillNonAtomic(this.transientByteBuffer, (short) 0, Constants.SIZE_TBB, (byte) 0x00);
 
             // Construct Select response data.
+            if (protocolMedia == APDU.PROTOCOL_MEDIA_SOFT) {
+                // Return VERSION if Select command is from card agent.
+                apdu.setOutgoingAndSend((short) 0, 
+                                        Util.arrayCopyNonAtomic(VERSION, (short) 0, 
+                                                                apduBuffer, (short) 0, 
+                                                                (short) VERSION.length));
+
+                return;
+            }
             // Check if applet is not personalized.
-            if ((this.gpState != GPSystem.SECURITY_DOMAIN_PERSONALIZED) || 
-                (protocolMedia != APDU.PROTOCOL_MEDIA_NFC)) {
+            else if (this.gpState != GPSystem.SECURITY_DOMAIN_PERSONALIZED) {
                 // Set FCI Template tag.
                 apduBuffer[(byte) 0] = Constants.TAG_FCI_TEMPLATE;
                 // Set DF Name tag.
@@ -475,7 +483,13 @@ public final class STPayP extends Applet implements ExtendedLength {
             // Check GP security level is C_MAC or C_MAC+C_DECRYPTION.
             if ((this.secureChannel.getSecurityLevel() & (byte) 0x03) >= SecureChannel.C_MAC) {
                 // Use GP API to unwrap data.
-                cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + cdataLength));
+                try {
+                    cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + cdataLength));
+                }
+                catch (ISOException isoe) {
+                    // Throw security exception to be consistent with SE.
+                    ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
+                }
                 cdataLength -= ISO7816.OFFSET_CDATA;
             }
 
@@ -676,7 +690,7 @@ public final class STPayP extends Applet implements ExtendedLength {
         this.random.generateData(msgData, (short) 2, (short) 13);
 
         // Encrypt notification message using the Mobile Key.
-        short encMsgDataLength = DataEncryption.encryptRemoteMessage(this.mobileKey, msgData, (short) 0, (short) 15);
+        short encMsgDataLength = this.dataEncryption.encryptRemoteMessage(msgData, (short) 0, (short) 15);
 
         // Send notification message to card agent.
         if (encMsgDataLength > (short) 0) {
@@ -930,11 +944,11 @@ public final class STPayP extends Applet implements ExtendedLength {
         }
 
         // Check if Mobile Key is initialized.
-        if ((this.mobileKey == null) || !this.mobileKey.isInitialized()) {
+        if (!this.dataEncryption.isMobileKeyInit()) {
             ISOException.throwIt(ISO7816.SW_CONDITIONS_NOT_SATISFIED);
         }
 
-        dataLength = this.mobileKey.getKey(apduBuffer, (short) 0);
+        dataLength = this.dataEncryption.getMobileKey(apduBuffer, (short) 0);
         apdu.setOutgoingLength(dataLength);
         apdu.sendBytes((short) 0, dataLength);
     }
@@ -960,7 +974,13 @@ public final class STPayP extends Applet implements ExtendedLength {
         // Check GP security level.
         if ((this.secureChannel.getSecurityLevel() & (byte) 0x03) >= SecureChannel.C_MAC) {
             // Use GP API to unwrap data.
-            cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + cdataLength));
+            try {
+                cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + cdataLength));
+            }
+            catch (ISOException isoe) {
+                // Throw security exception to be consistent with SE.
+                ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
+            }
             cdataLength -= ISO7816.OFFSET_CDATA;
         }
 
