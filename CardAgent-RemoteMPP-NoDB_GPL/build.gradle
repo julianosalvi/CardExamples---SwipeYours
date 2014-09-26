@@ -1,13 +1,13 @@
 apply plugin: 'java'
 apply plugin: 'eclipse'
 
-sourceCompatibility  = 1.6
+sourceCompatibility = 1.6
 targetCompatibility = 1.6
 
 dependencies {
-    compile fileTree('../../java/IssuerSdkBundle/sdk-libs').include('virtualcardAgentTester-*.jar')
     compile fileTree('lib').include('CardAgent-RemoteMPP-NoDB-Crypto_*.jar')
-    compile fileTree(System.getenv("ANDROID_HOME")+'platforms/android-19').include('android.jar')
+    compile fileTree(System.getenv("ANDROID_HOME")+'/platforms/android-19').include('android.jar')
+    compile fileTree('../../java/IssuerSdkBundle/sdk-libs').include('virtualcardAgentTester-*.jar')
 }
 
 sourceSets {
@@ -20,7 +20,14 @@ sourceSets {
 
 eclipse.classpath.file {
     whenMerged { classpath ->
-        classpath.entries.findAll { entry -> entry.kind == 'lib' }*.exported = false
+        classpath.entries.removeAll { entry -> entry.path == 'org.eclipse.jdt.launching.JRE_CONTAINER' }
+    }
+
+    whenMerged { classpath ->
+        classpath.entries.findAll { entry -> entry.hasProperty('exported') }*.exported = false
+    }
+
+    whenMerged { classpath ->
+        classpath.entries.findAll { entry -> entry.path.contains(rootProject.name) }*.exported = true
     }
 }
-

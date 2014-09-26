@@ -37,13 +37,10 @@ import java.util.Arrays;
 import javacard.framework.APDU;
 import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
-
-import javax.crypto.spec.SecretKeySpec;
-
 import android.util.Log;
 
 import com.simplytapp.cardagent.remotempp.crypto.CryptogramGeneration;
-import com.simplytapp.cardagent.remotempp.crypto.DataDecryption;
+import com.simplytapp.cardagent.remotempp.crypto.DataCipher;
 import com.simplytapp.cardagent.remotempp.crypto.OfflineDataAuthentication;
 import com.simplytapp.virtualcard.Agent;
 import com.simplytapp.virtualcard.ApprovalData;
@@ -60,13 +57,16 @@ import com.st.mmpp.data.PaymentTokenPayloadSingleUseKey;
  * mobile PIN before every transaction.
  * 
  * @author SimplyTapp, Inc.
- * @version 1.2 GPL
+ * @version 1.2.1 GPL
  */
 public final class CardAgent extends Agent {
 
     private static final String LOG_TAG = CardAgent.class.getSimpleName();
 
     private static final long serialVersionUID = 1L;
+
+    // 1.2.1
+    private static final byte[] VERSION = { 0x31, 0x2E, 0x32, 0x2E, 0x31 };
 
     // Remote Management Information definitions.
     private static final byte RMI_VERSION_MASK               = (byte) 0xE0;
@@ -143,6 +143,7 @@ public final class CardAgent extends Agent {
     private transient boolean twoTap = false;
     private transient boolean disabled = false;
     private transient boolean terminated = false;
+    private transient boolean invalidVersion = false;
 
     // Threads to access remote card applet.
     private transient Thread tGetCardProfile;
@@ -187,8 +188,6 @@ public final class CardAgent extends Agent {
 
     private boolean pinVerificationSuccessful;
 
-    private transient SecretKeySpec mKey;
-
     private transient long transactionStartTime;
 
     public CardAgent() {
@@ -196,8 +195,7 @@ public final class CardAgent extends Agent {
         allowSoftTransactions();
         denySocketTransactions();
 
-        setAidCategory("payment");
-        //setAidCategory(AID_CATEGORY_PAYMENT);
+        setAidCategory(AID_CATEGORY_PAYMENT);
         try {
             registerAid(MC_PAYMENT_AID);
         }
@@ -265,7 +263,10 @@ public final class CardAgent extends Agent {
             }
 
             try {
-                if (this.terminated) {
+                if (this.invalidVersion) {
+                    postMessage("Incompatible Card Applet", false, null);
+                }
+                else if (this.terminated) {
                     postMessage("Account is Terminated", false, null);
                 }
                 else if (this.disabled) {
@@ -276,6 +277,10 @@ public final class CardAgent extends Agent {
                 }
                 else {
                     postMessage("No More PTP_SUK to\nPerform Transactions\nAttempting to Get More PTP_SUK...", false, null);
+
+                    // Provision additional PTP_SUK.
+                    this.connectRetryCounter = 0;
+                    getPtpSuk(false);
                 }
             }
             catch (IOException e) {
@@ -326,7 +331,7 @@ public final class CardAgent extends Agent {
         this.transactionStartTime = System.currentTimeMillis();
         Log.i(LOG_TAG, "transactionStarted Timestamp=" + this.transactionStartTime);
 
-        // NOTE: Workaround for testing only.
+        // NOTE: Workaround for not using Mobile PIN.
         this.pinVerificationSuccessful = true;
 
         // Perform transaction checks.
@@ -384,15 +389,15 @@ public final class CardAgent extends Agent {
         // Block until there is no thread accessing remote card applet before processing remote message.
         blockCondition(true, true, 50, "messageFromRemoteCard");
 
-        if (this.mKey == null) {
-            Log.e(LOG_TAG, "Missing mKey to decrypt notification message.");
-            return;
-        }
-
         try {
-            // Decrypt notification message using the Mobile Key.
-            byte[] msgData = DataDecryption.decryptRemoteMessage(this.mKey, DataUtil.stringToCompressedByteArray(msg));
+            if (!DataCipher.isMobileKeySet()) {
+                Log.e(LOG_TAG, "Missing M_Key to decrypt remote message.");
+                return;
+            }
 
+            // Decrypt notification message.
+            byte[] msgData = DataCipher.decryptRemoteMessage(DataUtil.stringToCompressedByteArray(msg));
+            // DEBUG
             //Log.i(LOG_TAG, "messageFromRemoteCard decrypted: " + DataUtil.byteArrayToHexString(msgData));
 
             if ((msgData == null) || 
@@ -1123,11 +1128,13 @@ public final class CardAgent extends Agent {
             // Generate PIN CVC3Track1.
             byte[] pinCvc3Track1 = CryptogramGeneration.generateCvc3(ptpSuk, 
                                                                      this.cardProfile.getPinIvCvc3Track1(), 
-                                                                     unpredictableNumber);
+                                                                     unpredictableNumber, 
+                                                                     null);
             // Generate PIN CVC3Track2.
             byte[] pinCvc3Track2 = CryptogramGeneration.generateCvc3(ptpSuk, 
                                                                      this.cardProfile.getPinIvCvc3Track2(), 
-                                                                     unpredictableNumber);
+                                                                     unpredictableNumber, 
+                                                                     null);
             if ((pinCvc3Track1 == null) || (pinCvc3Track2 == null)) {
                 ISOException.throwIt(ISO7816.SW_CONDITIONS_NOT_SATISFIED);
             }
@@ -1584,8 +1591,9 @@ public final class CardAgent extends Agent {
         byte[] ac = CryptogramGeneration.generateCvn14Cryptogram(ptpSuk, 
                                                                  apduByteBuffer.array(), 
                                                                  acInputOffset, 
-                                                                 apduByteBuffer.position() - acInputOffset);
-        if (ac == null) {
+                                                                 apduByteBuffer.position() - acInputOffset, 
+                                                                 null);
+        if ((ac == null) || (ac.length != PayPConstants.LENGTH_AC)) {
             ISOException.throwIt(ISO7816.SW_CONDITIONS_NOT_SATISFIED);
         }
 
@@ -1914,11 +1922,41 @@ public final class CardAgent extends Agent {
                 }
 
                 byte[] selectResponse = getCardData.getNextResponse();
+                boolean selectError = false;
+                Short selectSw = null;
                 if ((selectResponse == null) || 
-                    (selectResponse.length <= 2) || 
-                    (ByteBuffer.wrap(selectResponse).getShort(selectResponse.length - 2) != ISO7816.SW_NO_ERROR)) {
-                    String invalidResponse = DataUtil.byteArrayToHexString(selectResponse);
-                    Log.e(LOG_TAG, "Invalid selectResponse: " + invalidResponse);
+                    (selectResponse.length < 2)) {
+                    selectError = true;
+                }
+                else {
+                    selectSw = ByteBuffer.wrap(selectResponse).getShort(selectResponse.length - 2);
+                    if ((selectSw != ISO7816.SW_NO_ERROR) || 
+                        ((selectResponse.length - 2) != VERSION.length)) {
+                        // Note: Assume length error is due to communication error.
+                        selectError = true;
+                    }
+                    else if (!Arrays.equals(Arrays.copyOf(selectResponse, VERSION.length), VERSION)) {
+                        invalidVersion = true;
+                    }
+                    else {
+                        invalidVersion = false;
+                    }
+                }
+
+                if (selectError || invalidVersion) {
+                    if (invalidVersion) {
+                        try {
+                            Log.e(LOG_TAG, "Incompatible agent version " + new String(VERSION, "UTF-8") + 
+                                           " and applet version " + new String(Arrays.copyOf(selectResponse, VERSION.length), "UTF-8"));
+                        }
+                        catch (Exception e) {
+                            Log.e(LOG_TAG, "Incompatible agent version " + DataUtil.byteArrayToHexString(VERSION) + 
+                                           " and applet version " + DataUtil.byteArrayToHexString(selectResponse, 0, VERSION.length));
+                        }
+                    }
+                    else {
+                        Log.e(LOG_TAG, "Invalid selectResponse: " + DataUtil.byteArrayToHexString(selectResponse));
+                    }
 
                     try {
                         disconnect();
@@ -1927,15 +1965,20 @@ public final class CardAgent extends Agent {
                     }
 
                     try {
-                        if ((invalidResponse.length() == 4) && 
-                            invalidResponse.equalsIgnoreCase(String.format("%04X", ISO7816.SW_FUNC_NOT_SUPPORTED))) {
+                        if (((selectSw != null) && (selectSw == ISO7816.SW_FUNC_NOT_SUPPORTED)) || 
+                            invalidVersion) {
                             terminated = true;
                             disabled = true;
 
                             cardProfile = null;
                             arrayPtpSuk = null;
 
-                            postMessage("Account is Terminated", false, null);
+                            if (invalidVersion) {
+                                postMessage("Incompatible Card Applet", false, null);
+                            }
+                            else {
+                                postMessage("Account is Terminated", false, null);
+                            }
                         }
                         else {
                             postMessage("Account Not Available", false, null);
@@ -1985,7 +2028,11 @@ public final class CardAgent extends Agent {
                     tGetCardProfile = null;
                     return;
                 }
-                mKey = new SecretKeySpec(mobileKey, "AES");
+                // DEBUG
+                //Log.i(LOG_TAG, "mobileKey=" + DataUtil.byteArrayToHexString(mobileKey));
+                if (!DataCipher.setMobileKey(mobileKey)) {
+                    Log.e(LOG_TAG, "Failed to set M_Key.");
+                }
 
                 byte[] cardProfileData = getCardData.getNextResponse();
                 if ((cardProfileData != null) && 
@@ -2117,6 +2164,8 @@ public final class CardAgent extends Agent {
                 arrayPtpSuk = new ArrayDeque<PaymentTokenPayloadSingleUseKey>(maxNumberPtpSuk);
 
                 final int addNumberPtpSuk = maxNumberPtpSuk - arrayPtpSuk.size();
+                // DEBUG
+                //Log.i(LOG_TAG, "addNumberPtpSuk=" + addNumberPtpSuk);
                 if (addNumberPtpSuk <= 0) {
                     try {
                         disconnect();
@@ -2132,6 +2181,14 @@ public final class CardAgent extends Agent {
 
                     tGetCardProfile = null;
                     return;
+                }
+
+                byte[] cardProfileHash = null;
+                try {
+                    MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+                    cardProfileHash = sha256.digest(cardProfileData);
+                }
+                catch (Exception e) {
                 }
 
                 TransceiveData tranceiveDataGetPtpSuk = new TransceiveData(TransceiveData.SOFT_CHANNEL);
@@ -2162,7 +2219,7 @@ public final class CardAgent extends Agent {
 
                 numberPtpSuk = 0;
                 while (numberPtpSuk < addNumberPtpSuk) {
-                    syncGetPtpSuk(tranceiveDataGetPtpSuk.getNextResponse());
+                    syncGetPtpSuk(tranceiveDataGetPtpSuk.getNextResponse(), cardProfileHash);
                     numberPtpSuk++;
                 }
 
@@ -2180,6 +2237,13 @@ public final class CardAgent extends Agent {
     }
 
     private void getPtpSuk(final boolean checkMinThreshold) {
+        // Perform these checks in case user still attempts transactions in these error states.
+        if (this.invalidVersion || this.terminated || this.disabled) {
+            Log.e(LOG_TAG, "getPtpSuk not allowed in current agent state.");
+
+            return;
+        }
+
         // Block until 'tGetPtpSuk' thread has stopped before continuing.
         blockCondition(false, true, 200, "getPtpSuk");
 
@@ -2311,9 +2375,39 @@ public final class CardAgent extends Agent {
                         return;
                     }
 
+                    // Calculate Card Profile hash.
+                    byte[] cardProfileHash = null;
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    ObjectOutput out = null;
+                    try {
+                        out = new ObjectOutputStream(bos);
+                        out.writeObject(cardProfile);
+                        byte[] cardProfileBytes = bos.toByteArray();
+
+                        MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+                        cardProfileHash = sha256.digest(cardProfileBytes);
+                    }
+                    catch (Exception e) {
+                    }
+                    finally {
+                        try {
+                            if (out != null) {
+                                out.close();
+                            }
+                        }
+                        catch (IOException ioe) {
+                        }
+
+                        try {
+                            bos.close();
+                        }
+                        catch (IOException ioe) {
+                        }
+                    }
+
                     numberPtpSuk = 0;
                     while (numberPtpSuk < addNumberPtpSuk) {
-                        syncGetPtpSuk(tranceiveDataGetPtpSuk.getNextResponse());
+                        syncGetPtpSuk(tranceiveDataGetPtpSuk.getNextResponse(), cardProfileHash);
                         numberPtpSuk++;
                     }
                 }
@@ -2325,7 +2419,7 @@ public final class CardAgent extends Agent {
         this.tGetPtpSuk.start();
     }
 
-    private synchronized void syncGetPtpSuk(byte[] ptpSukData) {
+    private synchronized void syncGetPtpSuk(byte[] ptpSukData, byte[] cardProfileHash) {
         if ((ptpSukData != null) && 
             (ptpSukData.length > 2) && 
             (ByteBuffer.wrap(ptpSukData).getShort(ptpSukData.length - 2) == ISO7816.SW_NO_ERROR)) {
@@ -2378,44 +2472,18 @@ public final class CardAgent extends Agent {
                     Log.e(LOG_TAG, "ptpSuk Debug Exception Log", e);
                 }
 
-                // Calculate Card Profile hash.
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                ObjectOutput out = null;
                 try {
-                    out = new ObjectOutputStream(bos);
-                    out.writeObject(cardProfile);
-                    byte[] cardProfileBytes = bos.toByteArray();
-
-                    MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-                    byte[] generatedPtpCpHash = sha256.digest(cardProfileBytes);
-                    if (Arrays.equals(Arrays.copyOf(generatedPtpCpHash, 24), ptpSuk.getPtpCpTruncatedHash())) {
+                    // Validate truncated Card Profile hash received in PTP_SUK.
+                    if (Arrays.equals(Arrays.copyOf(cardProfileHash, 24), ptpSuk.getPtpCpTruncatedHash())) {
                         // Hash matched.
                         arrayPtpSuk.add(ptpSuk);
                     }
                     else {
-                        try {
-                            postMessage("Corrupted PTP_SUK Error", false, null);
-                        }
-                        catch (IOException e1) {
-                        }
+                        postMessage("Corrupted PTP_SUK Error", false, null);
                     }
                 }
                 catch (Exception e) {
-                }
-                finally {
-                    try {
-                        if (out != null) {
-                            out.close();
-                        }
-                    }
-                    catch (IOException ex) {
-                    }
-
-                    try {
-                        bos.close();
-                    }
-                    catch (IOException ex) {
-                    }
+                    Log.e(LOG_TAG, "Add PTP_SUK Exception Log", e);
                 }
             }
         }
