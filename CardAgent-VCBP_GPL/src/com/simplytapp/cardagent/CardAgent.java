@@ -58,13 +58,16 @@ import com.st.vcbp.data.TransactionVerificationLog;
  * Specifications Version 1.3 July 2014.
  * 
  * @author SimplyTapp, Inc.
- * @version 1.3.1 GPL
+ * @version 1.3.2 GPL
  */
 public final class CardAgent extends Agent {
 
     private static final String LOG_TAG = CardAgent.class.getSimpleName();
 
     private static final long serialVersionUID = 1L;
+
+    // 1.3.2
+    private static final byte[] VERSION = { 0x31, 0x2E, 0x33, 0x2E, 0x32 };
 
     private static final String GCM_MSG_ACCOUNT_PARAMETERS_UPDATE = "apupdate";
     private static final String GCM_MSG_DEACTIVATE                = "deactivate";
@@ -127,6 +130,7 @@ public final class CardAgent extends Agent {
     private transient boolean transactionStartFailed = false;
     private transient boolean disabled = false;
     private transient boolean terminated = false;
+    private transient boolean invalidVersion = false;
 
     // Threads to access remote card applet.
     private transient Thread tGetAccountParams;
@@ -175,8 +179,7 @@ public final class CardAgent extends Agent {
         denySoftTransactions();
         denySocketTransactions();
 
-        setAidCategory("payment");
-        //setAidCategory(AID_CATEGORY_PAYMENT);
+        setAidCategory(AID_CATEGORY_PAYMENT);
         try {
             registerAid(V_PAYMENT_AID);
         }
@@ -275,7 +278,7 @@ public final class CardAgent extends Agent {
         //Log.i(LOG_TAG, "activated");
 
         if (this.tGetAccountParams != null) {
-            // Wait until 'tGetAccountParams' thread has stopped before performing transaction checks.
+            // Block until 'tGetAccountParams' thread has stopped before performing transaction checks.
             blockCondition(true, false, false, 100, "activated");
 
             // Provide enough time for message generated in 'tGetAccountParams' thread to be displayed on screen. 
@@ -289,7 +292,7 @@ public final class CardAgent extends Agent {
         performTransactionChecks(true);
     }
 
-	// Perform transaction initialization checks.
+    // Perform transaction initialization checks.
     private void performTransactionChecks(boolean activating) {
         if ((this.accountParamsStatic == null) || 
             (this.arrayAccountParamsDynamic == null) || 
@@ -309,7 +312,10 @@ public final class CardAgent extends Agent {
             }
 
             try {
-                if (this.terminated) {
+                if (this.invalidVersion) {
+                    postMessage("Incompatible Card Applet", false, null);
+                }
+                else if (this.terminated) {
                     postMessage("Account is Terminated", false, null);
                 }
                 else if (this.disabled) {
@@ -325,6 +331,11 @@ public final class CardAgent extends Agent {
                                 "to Perform Transactions\n" + 
                                 "Attempting to Replenish Account Parameter...", 
                                 false, null);
+
+                    // Provision additional Dynamic Account Parameters.
+                    this.connectRetryCounter = 0;
+                    this.transceiveRetryCounter = 0;
+                    getDynamicAccountParams(false);
                 }
             }
             catch (IOException e) {
@@ -725,10 +736,16 @@ public final class CardAgent extends Agent {
                 }
             }
             else {
+                // DEBUG
+                Log.v(LOG_TAG, "C-APDU Header: " + DataUtil.byteArrayToHexString(apduBuffer, 0, 5));
+
                 sendApduCFailure(ISO7816.SW_INS_NOT_SUPPORTED);
             }
         }
         else {
+            // DEBUG
+            Log.v(LOG_TAG, "C-APDU Header: " + DataUtil.byteArrayToHexString(apduBuffer, 0, 5));
+
             sendApduCFailure(ISO7816.SW_CLA_NOT_SUPPORTED);
         }
     }
@@ -750,14 +767,14 @@ public final class CardAgent extends Agent {
             ISOException.throwIt(ISO7816.SW_INCORRECT_P1P2);
         }
 
-        // Check if Lc=[number of data bytes read].
-        // Check if Lc=0x23.
-        // Check if Le=0x00.
         short cdataLength = apdu.setIncomingAndReceive();
 
         // DEBUG
         Log.v(LOG_TAG, "C-APDU: " + DataUtil.byteArrayToHexString(apduBuffer, 0, cdataLength + 6));
 
+        // Check if Lc=[number of data bytes read].
+        // Check if Lc=0x23.
+        // Check if Le=0x00.
         if ((cdataLength != (short) (apduBuffer[ISO7816.OFFSET_LC] & (short) 0x00FF)) || 
             (cdataLength != (short) 0x23) || 
             (apdu.setOutgoing() != (short) 256)) {
@@ -812,7 +829,7 @@ public final class CardAgent extends Agent {
             apduByteBuffer.position(29);
 
             // Set unpredictable number to later save in Transaction Verification Log.
-            this.unpredictableNumber = DataUtil.byteArrayToHexString(apduBuffer, (short) 25, (short) 4);
+            this.unpredictableNumber = DataUtil.byteArrayToHexString(apduBuffer, apduByteBuffer.position() - 4, 4);
         }
         else if ((ttqByte1 & (byte) 0x80) != (byte) 0x80) {
             // Terminal does not support MSD.
@@ -1026,13 +1043,14 @@ public final class CardAgent extends Agent {
             // Append card data used as input to the cryptogram.
             // '82'      2 bytes    Application Interchange Profile (AIP)
             // '9F36'    2 bytes    Application Transaction Counter (ATC)
+            // '9F10'    32 bytes   Issuer Application Data (IAD)
             // Append AIP.
             apduByteBuffer.putShort(aip);
             // Append ATC.
             apduByteBuffer.putShort(accountParamsDynamic.getAtc());
-            // '9F10'    4 bytes    Card Verification Results (part of Issuer Application Data - IAD)
-            // Append first 4 bytes of CVR from IAD.
-            apduByteBuffer.put(issuerApplicationData, AccountParamsStatic.IAD_OFFSET_CVR_BYTE_1, 4);
+            // Append IAD.
+            apduByteBuffer.put(issuerApplicationData, AccountParamsStatic.IAD_VALUE_OFFSET, 
+                               (int) (issuerApplicationData[AccountParamsStatic.IAD_VALUE_OFFSET - 1] & 0xFF));
 
             // Generate AC.
             byte[] ac = CryptogramGeneration.generateCvn43Cryptogram(accountParamsDynamic, apduBuffer, 0, apduByteBuffer.position());
@@ -1251,7 +1269,7 @@ public final class CardAgent extends Agent {
         }
 
         // Block until 'tGetDynamicAccountParams' and 'tPutTransactionVerificationLog' threads have stopped before continuing.
-        blockCondition(false, true, true, 100, "getAccountParams");
+        blockCondition(false, true, true, 200, "getAccountParams");
 
         // NOTE: This thread calls 'setBusy' method when it starts and 'clearBusy' when it stops to 
         //       block agent from processing contactless transaction while the thread is running.
@@ -1367,15 +1385,45 @@ public final class CardAgent extends Agent {
                     }
 
                     byte[] selectResponse = tranceiveDataGetAccountParams.getNextResponse();
+                    boolean selectError = false;
+                    Short selectSw = null;
                     if ((selectResponse == null) || 
-                        (selectResponse.length <= 2) || 
-                        (ByteBuffer.wrap(selectResponse).getShort(selectResponse.length - 2) != ISO7816.SW_NO_ERROR)) {
-                        String invalidResponse = DataUtil.byteArrayToHexString(selectResponse);
-                        Log.e(LOG_TAG, "tranceiveDataGetAccountParams invalid selectResponse: " + invalidResponse);
+                        (selectResponse.length < 2)) {
+                        selectError = true;
+                    }
+                    else {
+                        selectSw = ByteBuffer.wrap(selectResponse).getShort(selectResponse.length - 2);
+                        if ((selectSw != ISO7816.SW_NO_ERROR) || 
+                            ((selectResponse.length - 2) != VERSION.length)) {
+                            // Note: Assume length error is due to communication error.
+                            selectError = true;
+                        }
+                        else if (!Arrays.equals(Arrays.copyOf(selectResponse, VERSION.length), VERSION)) {
+                            invalidVersion = true;
+                        }
+                        else {
+                            invalidVersion = false;
+                        }
+                    }
+
+                    if (selectError || invalidVersion) {
+                        if (invalidVersion) {
+                            try {
+                                Log.e(LOG_TAG, "Incompatible agent version " + new String(VERSION, "UTF-8") + 
+                                               " and applet version " + new String(Arrays.copyOf(selectResponse, VERSION.length), "UTF-8"));
+                            }
+                            catch (Exception e) {
+                                Log.e(LOG_TAG, "Incompatible agent version " + DataUtil.byteArrayToHexString(VERSION) + 
+                                               " and applet version " + DataUtil.byteArrayToHexString(selectResponse, 0, VERSION.length));
+                            }
+                        }
+                        else {
+                            Log.e(LOG_TAG, "Invalid selectResponse: " + DataUtil.byteArrayToHexString(selectResponse));
+                        }
 
                         try {
-                            if ((invalidResponse.length() == 4) && 
-                                invalidResponse.equalsIgnoreCase(String.format("%04X", ISO7816.SW_FUNC_NOT_SUPPORTED))) {
+                            if (((selectSw != null) && (selectSw == ISO7816.SW_FUNC_NOT_SUPPORTED)) || 
+                                invalidVersion) {
                                 terminated = true;
                                 disabled = true;
 
@@ -1386,7 +1434,12 @@ public final class CardAgent extends Agent {
 
                                 handlerTimeToExpire.removeCallbacks(runnableTimeToExpire);
 
-                                postMessage("Account is Terminated", false, null);
+                                if (invalidVersion) {
+                                    postMessage("Incompatible Card Applet", false, null);
+                                }
+                                else {
+                                    postMessage("Account is Terminated", false, null);
+                                }
                             }
                             else {
                                 // Retry transceive.
@@ -1698,6 +1751,13 @@ public final class CardAgent extends Agent {
     }
 
     private void getDynamicAccountParams(final boolean checkMinThreshold) {
+        // Perform these checks in case user still attempts transactions in these error states.
+        if (this.invalidVersion || this.terminated || this.disabled) {
+            Log.e(LOG_TAG, "getDynamicAccountParams not allowed in current agent state.");
+
+            return;
+        }
+
         // Block until 'tGetDynamicAccountParams' thread has stopped before continuing.
         blockCondition(false, true, false, 200, "getDynamicAccountParams");
 
