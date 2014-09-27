@@ -57,11 +57,14 @@ import com.st.vcbp.data.TransactionVerificationLog;
  * Specifications Version 1.3 July 2014.
  * 
  * @author SimplyTapp, Inc.
- * @version 1.3.1 GPL
+ * @version 1.3.2 GPL
  */
 public final class STPayW extends Applet implements ExtendedLength {
 
     private static final long serialVersionUID = 1L;
+
+    // 1.3.2
+    private static final byte[] VERSION = { 0x31, 0x2E, 0x33, 0x2E, 0x32 };
 
     private static final String GCM_MSG_ACCOUNT_PARAMETERS_UPDATE = "apupdate";
     private static final String GCM_MSG_DEACTIVATE                = "deactivate";
@@ -209,7 +212,7 @@ public final class STPayW extends Applet implements ExtendedLength {
      *            the incoming <code>APDU</code> object
      * @see javacard.framework.Applet.process
      */
-	public void process(APDU apdu) {
+	public void process(APDU apdu) throws ISOException {
 		byte[] apduBuffer = apdu.getBuffer();
 
         byte protocolMedia = (byte) (APDU.getProtocol() & APDU.PROTOCOL_MEDIA_MASK);
@@ -234,7 +237,16 @@ public final class STPayW extends Applet implements ExtendedLength {
                 ISOException.throwIt(ISO7816.SW_FILE_NOT_FOUND);
             }
 
-            // Respond with FCI Template if personalized.
+            // Construct Select response data.
+            if (protocolMedia == APDU.PROTOCOL_MEDIA_SOFT) {
+                // Return VERSION if Select command is from card agent.
+                apdu.setOutgoingAndSend((short) 0, 
+                                        Util.arrayCopyNonAtomic(VERSION, (short) 0, 
+                                                                apduBuffer, (short) 0, 
+                                                                (short) VERSION.length));
+
+                return;
+            }
             apduBuffer[0] = (byte) 0x6F;
             apduBuffer[2] = (byte) 0x84;
             apduBuffer[3] = JCSystem.getAID().getBytes(apduBuffer, (short) 4);
@@ -388,7 +400,13 @@ public final class STPayW extends Applet implements ExtendedLength {
             // Check GP security level is C_MAC or C_MAC+C_DECRYPTION.
             if ((this.secureChannel.getSecurityLevel() & (byte) 0x03) >= SecureChannel.C_MAC) {
                 // Use GP API to unwrap data.
-                cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + cdataLength));
+                try {
+                    cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + cdataLength));
+                }
+                catch (ISOException isoe) {
+                    // Throw security exception to be consistent with SE.
+                    ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
+                }
                 cdataLength -= ISO7816.OFFSET_CDATA;
             }
 
@@ -470,7 +488,13 @@ public final class STPayW extends Applet implements ExtendedLength {
             // Check GP security level is C_MAC or C_MAC+C_DECRYPTION.
             if ((this.secureChannel.getSecurityLevel() & (byte) 0x03) >= SecureChannel.C_MAC) {
                 // Use GP API to unwrap data.
-                cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + cdataLength));
+                try {
+                    cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (ISO7816.OFFSET_CDATA + cdataLength));
+                }
+                catch (ISOException isoe) {
+                    // Throw security exception to be consistent with SE.
+                    ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
+                }
                 cdataLength -= ISO7816.OFFSET_CDATA;
             }
 
@@ -998,7 +1022,13 @@ public final class STPayW extends Applet implements ExtendedLength {
         // Check GP security level.
         if ((this.secureChannel.getSecurityLevel() & (byte) 0x03) >= SecureChannel.C_MAC) {
             // Use GP API to unwrap data.
-            cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (offsetCdata + cdataLength));
+            try {
+                cdataLength = this.secureChannel.unwrap(apduBuffer, (short) 0, (short) (offsetCdata + cdataLength));
+            }
+            catch (ISOException isoe) {
+                // Throw security exception to be consistent with SE.
+                ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
+            }
             cdataLength -= offsetCdata;
         }
 
